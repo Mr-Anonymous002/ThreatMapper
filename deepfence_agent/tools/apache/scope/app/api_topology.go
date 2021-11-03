@@ -1,8 +1,16 @@
 package app
 
 import (
+	"bufio"
+	"compress/gzip"
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 
 	"context"
@@ -17,6 +25,7 @@ import (
 	"github.com/weaveworks/scope/render"
 	"github.com/weaveworks/scope/render/detailed"
 	"github.com/weaveworks/scope/report"
+	"github.com/ugorji/go/codec"
 )
 
 const (
@@ -48,9 +57,77 @@ type rendererHandler func(context.Context, render.Renderer, render.Transformer, 
 func handleTopology(ctx context.Context, renderer render.Renderer, transformer render.Transformer, rc detailed.RenderContext, w http.ResponseWriter, r *http.Request) {
 	censorCfg := report.GetCensorConfigFromRequest(r)
 	nodeSummaries := detailed.Summaries(ctx, rc, render.Render(ctx, rc.Report, renderer, transformer).Nodes, true)
+
 	respondWith(ctx, w, http.StatusOK, APITopology{
 		Nodes: detailed.CensorNodeSummaries(nodeSummaries, censorCfg),
 	})
+	fmt.Println("Responding /topology/hosts: "+"var/log/response.json")
+	WriteToFile("var/log/response.json", APITopology{
+		Nodes: detailed.CensorNodeSummaries(nodeSummaries, censorCfg),
+	})
+}
+
+// WriteToFile writes a Report to a file. The encoding is determined
+// by the file extension (".msgpack" or ".json", with an optional
+// ".gz").
+func WriteToFile(path string, rep APITopology) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	msgpack, gzipped, err := fileType(path)
+	if err != nil {
+		return err
+	}
+
+	var w io.Writer
+	bufwriter := bufio.NewWriter(f)
+	defer bufwriter.Flush()
+	w = bufwriter
+	if gzipped {
+		gzwriter := gzipWriterPool.Get().(*gzip.Writer)
+		gzwriter.Reset(w)
+		defer gzipWriterPool.Put(gzwriter)
+		defer gzwriter.Close()
+		w = gzwriter
+	}
+
+	return codec.NewEncoder(w, codecHandle(msgpack)).Encode(rep)
+}
+func codecHandle(msgpack int) codec.Handle {
+	if (msgpack == 0) {
+		return &codec.JsonHandle{}
+	} else if (msgpack == 1) {
+		return &codec.MsgpackHandle{}
+	} else if (msgpack == 2) {
+		return &codec.BincHandle{}
+	}
+	return nil
+}
+var gzipWriterPool = &sync.Pool{
+	// NewWriterLevel() only errors if the compression level is invalid, which can't happen here
+	New: func() interface{} { w, _ := gzip.NewWriterLevel(nil, gzip.DefaultCompression); return w },
+}
+
+func fileType(path string) (msgpack int, gzipped bool, err error) {
+	fileType := filepath.Ext(path)
+	gzipped = false
+	if fileType == ".gz" {
+		gzipped = true
+		fileType = filepath.Ext(strings.TrimSuffix(path, fileType))
+	}
+	switch fileType {
+	case ".json":
+		return 0, gzipped, nil
+	case ".msgpack":
+		return 1, gzipped, nil
+	case ".binc":
+		return 2, gzipped, nil
+	default:
+		return 3, false, fmt.Errorf("Unsupported file extension: %v", fileType)
+	}
 }
 
 // Individual nodes.
