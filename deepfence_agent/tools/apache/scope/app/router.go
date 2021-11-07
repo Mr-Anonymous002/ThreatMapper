@@ -147,6 +147,8 @@ func RegisterReportPostHandler(a Adder, router *mux.Router) {
 		}
 
 		rpt, err := report.MakeFromBinary(ctx, reader, gzipped, isMsgpack)
+		rpt.WriteToFile("/var/log/submitted.json")
+		fmt.Printf("submitted: %s\n", "/var/log/submitted.json")
 		if err != nil {
 			respondWith(ctx, w, http.StatusBadRequest, err)
 			return
