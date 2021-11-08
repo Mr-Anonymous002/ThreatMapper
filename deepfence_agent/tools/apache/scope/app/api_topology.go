@@ -141,6 +141,7 @@ func handleNode(ctx context.Context, renderer render.Renderer, transformer rende
 	// then (2) applying the filter separately to that result.  If the
 	// node is lost in the second step, we simply put it back.
 	nodes := renderer.Render(ctx, rc.Report)
+	fmt.Println("Filtered on render:" + strconv.Itoa(nodes.Filtered))
 	rc.Report.WriteToFile("/var/log/report.json")
 	node, ok := nodes.Nodes[nodeID]
 	if !ok {
@@ -148,6 +149,7 @@ func handleNode(ctx context.Context, renderer render.Renderer, transformer rende
 		return
 	}
 	nodes = transformer.Transform(nodes)
+	fmt.Println("Filtered on Transform:" + strconv.Itoa(nodes.Filtered))
 	if filteredNode, ok := nodes.Nodes[nodeID]; ok {
 		node = filteredNode
 	} else { // we've lost the node during filtering; put it back

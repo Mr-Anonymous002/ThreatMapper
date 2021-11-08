@@ -723,8 +723,7 @@ func (r *Registry) RendererForTopology(topologyID string, values url.Values, rpt
 	if len(filters) > 0 {
 		return topology.renderer, render.Transformers([]render.Transformer{render.ComposeFilterFuncs(filters...), render.FilterUnconnectedPseudo}), nil
 	}
-	fmt.Println("Return nil filter / transformer")
-	return topology.renderer, nil, nil
+	return topology.renderer, render.FilterUnconnectedPseudo, nil
 }
 
 type reporterHandler func(context.Context, Reporter, http.ResponseWriter, *http.Request)
