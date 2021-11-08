@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -140,6 +141,8 @@ func handleNode(ctx context.Context, renderer render.Renderer, transformer rende
 	// filtering, which gives us the node (if it exists at all), and
 	// then (2) applying the filter separately to that result.  If the
 	// node is lost in the second step, we simply put it back.
+	fmt.Print("reflect.TypeOf(renderer): ")
+	fmt.Println(reflect.TypeOf(renderer))
 	nodes := renderer.Render(ctx, rc.Report)
 	fmt.Println("Filtered on render:" + strconv.Itoa(nodes.Filtered))
 	rc.Report.WriteToFile("/var/log/report.json")
