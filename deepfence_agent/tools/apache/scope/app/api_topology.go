@@ -156,8 +156,8 @@ func handleNode(ctx context.Context, renderer render.Renderer, transformer rende
 	}
 	rawNode := detailed.MakeNode(topologyID, rc, nodes.Nodes, node)
 	respondWith(ctx, w, http.StatusOK, APINode{Node: detailed.CensorNode(rawNode, censorCfg)})
-	fmt.Println("Responding /topology/hosts: "+"var/log/response.json")
-	WriteToFile("var/log/response.json", APINode{Node: detailed.CensorNode(rawNode, censorCfg)})
+	fmt.Println("Responding /topology/hosts: "+"/var/log/response.json")
+	WriteToFile("/var/log/response.json", APINode{Node: detailed.CensorNode(rawNode, censorCfg)})
 }
 
 // Websocket for the full topology.
