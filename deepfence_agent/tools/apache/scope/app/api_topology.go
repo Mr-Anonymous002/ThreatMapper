@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,11 +22,11 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/ugorji/go/codec"
 	"github.com/weaveworks/scope/common/xfer"
 	"github.com/weaveworks/scope/render"
 	"github.com/weaveworks/scope/render/detailed"
 	"github.com/weaveworks/scope/report"
-	"github.com/ugorji/go/codec"
 )
 
 const (
@@ -61,16 +62,12 @@ func handleTopology(ctx context.Context, renderer render.Renderer, transformer r
 	respondWith(ctx, w, http.StatusOK, APITopology{
 		Nodes: detailed.CensorNodeSummaries(nodeSummaries, censorCfg),
 	})
-	fmt.Println("Responding /topology/hosts: "+"var/log/response.json")
-	WriteToFile("var/log/response.json", APITopology{
-		Nodes: detailed.CensorNodeSummaries(nodeSummaries, censorCfg),
-	})
 }
 
 // WriteToFile writes a Report to a file. The encoding is determined
 // by the file extension (".msgpack" or ".json", with an optional
 // ".gz").
-func WriteToFile(path string, rep APITopology) error {
+func WriteToFile(path string, rep APINode) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
@@ -154,10 +151,13 @@ func handleNode(ctx context.Context, renderer render.Renderer, transformer rende
 		node = filteredNode
 	} else { // we've lost the node during filtering; put it back
 		nodes.Nodes[nodeID] = node
+		fmt.Println("Nodes.Filtered: "+strconv.Itoa(nodes.Filtered))
 		nodes.Filtered--
 	}
 	rawNode := detailed.MakeNode(topologyID, rc, nodes.Nodes, node)
 	respondWith(ctx, w, http.StatusOK, APINode{Node: detailed.CensorNode(rawNode, censorCfg)})
+	fmt.Println("Responding /topology/hosts: "+"var/log/response.json")
+	WriteToFile("var/log/response.json", APINode{Node: detailed.CensorNode(rawNode, censorCfg)})
 }
 
 // Websocket for the full topology.
