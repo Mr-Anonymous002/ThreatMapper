@@ -141,6 +141,7 @@ func handleNode(ctx context.Context, renderer render.Renderer, transformer rende
 	// then (2) applying the filter separately to that result.  If the
 	// node is lost in the second step, we simply put it back.
 	nodes := renderer.Render(ctx, rc.Report)
+	rc.Report.WriteToFile("/var/log/report.json")
 	node, ok := nodes.Nodes[nodeID]
 	if !ok {
 		http.NotFound(w, r)
