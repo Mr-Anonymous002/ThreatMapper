@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -52,6 +53,7 @@ var (
 			{Value: "show", Label: "Show unmanaged", filter: nil, filterPseudo: false},
 			{Value: "hide", Label: "Hide unmanaged", filter: render.IsNotPseudo, filterPseudo: true},
 		},
+		IsUiAvailable: true,
 	}
 	immediateParentFilter = APITopologyOptionGroup{
 		ID: "immediate_parent",
@@ -65,6 +67,7 @@ var (
 			{Value: cloudRegionsID, Label: "Cloud Region", filter: render.IsImmediateParent(report.CloudRegion), filterPseudo: false},
 		},
 		NoneLabel: "Immediate parent",
+		IsUiAvailable: false,
 	}
 	k8sControllerTypeFilter = APITopologyOptionGroup{
 		ID: "kubernetes_node_type",
@@ -77,6 +80,19 @@ var (
 		},
 		SelectType: "union",
 		NoneLabel:  "All Controllers",
+		IsUiAvailable: true,
+	}
+	vulnScanStatusFilter = APITopologyOptionGroup{
+		ID: "vulnerability_scan_status",
+		Options: []APITopologyOption{
+			{Value: "queued", Label: "Queued", filter: render.IsMetadata("vulnerability_scan_status", "queued"), filterPseudo: false},
+			{Value: "in_progress", Label: "In Progress", filter: render.IsMetadata("vulnerability_scan_status", "in_progress"), filterPseudo: false},
+			{Value: "complete", Label: "Complete", filter: render.IsMetadata("vulnerability_scan_status", "complete"), filterPseudo: false},
+			{Value: "error", Label: "Error", filter: render.IsMetadata("vulnerability_scan_status", "error"), filterPseudo: false},
+		},
+		SelectType: "union",
+		NoneLabel:  "Vulnerability Scan",
+		IsUiAvailable: true,
 	}
 	//storageFilter = APITopologyOptionGroup{
 	//	ID:      "storage",
@@ -108,10 +124,10 @@ func namespaceFilters(namespaces []string, noneLabel string) APITopologyOptionGr
 }
 
 // updateFilters updates the available filters based on the current report.
-func updateFilters(rpt report.Report, topologies []APITopologyDesc) []APITopologyDesc {
+func updateFilters(rpt report.Report, topologies []APITopologyDesc, filterTopologies map[string]filterTopology) []APITopologyDesc {
 	//topologies = updateKubeFilters(rpt, topologies)
 	//topologies = updateSwarmFilters(rpt, topologies)
-	topologies = updateMetadataFilters(rpt, topologies)
+	topologies = updateMetadataFilters(rpt, topologies, filterTopologies)
 	return topologies
 }
 
@@ -156,36 +172,83 @@ func getParentFilterGroups(nodes report.Nodes, topologyName string, filterID str
 	return APITopologyOptionGroup{ID: filterID, SelectType: "union", Options: options, NoneLabel: noneLabel}
 }
 
-func updateMetadataFilters(rpt report.Report, topologies []APITopologyDesc) []APITopologyDesc {
+// Check if a certain topology filters are applied, then other topology filters cannot be applied
+func differentTopologyFiltersApplied(topologyNames []string, filterTopologies map[string]filterTopology) bool {
+	for k, v := range filterTopologies {
+		if !inSlice(topologyNames, k) {
+			return true
+		}
+		if len(v.SubTopologies) != 0 && differentTopologyFiltersApplied(topologyNames, v.SubTopologies) {
+			return true
+		}
+	}
+	return false
+}
+
+func inSlice(slice []string, val string) bool {
+	for _, item := range slice {
+		if item == val {
+			return true
+		}
+	}
+	return false
+}
+
+func updateMetadataFilters(rpt report.Report, topologies []APITopologyDesc, filterTopologies map[string]filterTopology) []APITopologyDesc {
 	hostTopologyActionGroups := getFilterGroups(map[string]string{"host_name": "Hostname"}, rpt.Host.Nodes)
-	podTopologyActionGroups := make([]APITopologyOptionGroup, 3)
-	containerTopologyActionGroups := make([]APITopologyOptionGroup, 4)
-	processTopologyActionGroups := make([]APITopologyOptionGroup, 5)
-	containerImageTopologyActionGroups := getFilterGroups(
-		map[string]string{"docker_image_name": "Image Name", "docker_image_tag": "Image Tag"},
-		rpt.ContainerImage.Nodes,
-	)
+	var cloudRegionActionGroups []APITopologyOptionGroup
+	var k8sClusterActionGroups []APITopologyOptionGroup
+	var containerImageTopologyActionGroups []APITopologyOptionGroup
+	var podTopologyActionGroups []APITopologyOptionGroup
+	var containerTopologyActionGroups []APITopologyOptionGroup
+	var processTopologyActionGroups []APITopologyOptionGroup
 	hostParentFilter := getParentFilterGroups(rpt.Host.Nodes, report.Host, hostsID, "Host")
-	containerTopologyActionGroups[0] = hostParentFilter
-	processTopologyActionGroups[0] = hostParentFilter
-	podTopologyActionGroups[0] = hostParentFilter
 	podParentFilter := getParentFilterGroups(rpt.Pod.Nodes, report.Pod, podsID, "Pod")
-	containerTopologyActionGroups[1] = podParentFilter
-	processTopologyActionGroups[1] = podParentFilter
-	processTopologyActionGroups[2] = getParentFilterGroups(rpt.Container.Nodes, report.Container, containersID, "Container")
 	kubernetesClusterParentFilter := getParentFilterGroups(rpt.KubernetesCluster.Nodes, report.KubernetesCluster, kubernetesClustersID, "Kubernetes Cluster")
-	hostTopologyActionGroups = append(hostTopologyActionGroups, kubernetesClusterParentFilter)
-	podTopologyActionGroups[1] = kubernetesClusterParentFilter
 	cloudRegionParentFilter := getParentFilterGroups(rpt.CloudRegion.Nodes, report.CloudRegion, cloudRegionsID, "Cloud Region")
-	hostTopologyActionGroups = append(hostTopologyActionGroups, cloudRegionParentFilter)
-	containerTopologyActionGroups[2] = cloudRegionParentFilter
-	processTopologyActionGroups[3] = cloudRegionParentFilter
 	cloudProviderParentFilter := getParentFilterGroups(rpt.CloudProvider.Nodes, report.CloudProvider, cloudProvidersID, "Cloud Provider")
-	cloudRegionActionGroups := []APITopologyOptionGroup{cloudProviderParentFilter}
-	k8sClusterActionGroups := []APITopologyOptionGroup{cloudProviderParentFilter}
-	containerTopologyActionGroups[3] = cloudProviderParentFilter
-	processTopologyActionGroups[4] = cloudProviderParentFilter
-	podTopologyActionGroups[2] = cloudProviderParentFilter
+	if differentTopologyFiltersApplied([]string{report.Container, report.ContainerImage}, filterTopologies) {
+		containerTopologyActionGroups = []APITopologyOptionGroup{}
+		containerImageTopologyActionGroups = []APITopologyOptionGroup{}
+	} else {
+		containerTopologyActionGroups = make([]APITopologyOptionGroup, 4)
+		containerTopologyActionGroups[0] = hostParentFilter
+		containerTopologyActionGroups[1] = podParentFilter
+		containerTopologyActionGroups[2] = cloudRegionParentFilter
+		containerTopologyActionGroups[3] = cloudProviderParentFilter
+		containerImageTopologyActionGroups = getFilterGroups(
+			map[string]string{"docker_image_name": "Image Name", "docker_image_tag": "Image Tag"},
+			rpt.ContainerImage.Nodes,
+		)
+	}
+	if differentTopologyFiltersApplied([]string{report.Process}, filterTopologies) {
+		processTopologyActionGroups = []APITopologyOptionGroup{}
+	} else {
+		processTopologyActionGroups = make([]APITopologyOptionGroup, 5)
+		processTopologyActionGroups[0] = hostParentFilter
+		processTopologyActionGroups[1] = podParentFilter
+		processTopologyActionGroups[2] = getParentFilterGroups(rpt.Container.Nodes, report.Container, containersID, "Container")
+		processTopologyActionGroups[3] = cloudRegionParentFilter
+		processTopologyActionGroups[4] = cloudProviderParentFilter
+	}
+	if differentTopologyFiltersApplied([]string{report.Pod}, filterTopologies) {
+		podTopologyActionGroups = []APITopologyOptionGroup{}
+	} else {
+		podTopologyActionGroups = make([]APITopologyOptionGroup, 3)
+		podTopologyActionGroups[0] = hostParentFilter
+		podTopologyActionGroups[1] = kubernetesClusterParentFilter
+		podTopologyActionGroups[2] = cloudProviderParentFilter
+	}
+	if !differentTopologyFiltersApplied([]string{report.Host}, filterTopologies) {
+		hostTopologyActionGroups = append(hostTopologyActionGroups, kubernetesClusterParentFilter)
+		hostTopologyActionGroups = append(hostTopologyActionGroups, cloudRegionParentFilter)
+	}
+	if !differentTopologyFiltersApplied([]string{report.CloudRegion}, filterTopologies) {
+		cloudRegionActionGroups = []APITopologyOptionGroup{cloudProviderParentFilter}
+	}
+	if !differentTopologyFiltersApplied([]string{report.KubernetesCluster}, filterTopologies) {
+		k8sClusterActionGroups = []APITopologyOptionGroup{cloudProviderParentFilter}
+	}
 	topologies = append([]APITopologyDesc{}, topologies...) // Make a copy so we can make changes safely
 	for i, t := range topologies {
 		if t.id == hostsID {
@@ -338,6 +401,7 @@ func MakeRegistry() *Registry {
 			},
 		},
 		immediateParentFilter,
+		vulnScanStatusFilter,
 	}
 
 	processFilter := []APITopologyOptionGroup{
@@ -445,7 +509,7 @@ func MakeRegistry() *Registry {
 			renderer: render.HostRenderer,
 			Name:     "Hosts",
 			Rank:     4,
-			Options:  []APITopologyOptionGroup{immediateParentFilter},
+			Options:  []APITopologyOptionGroup{immediateParentFilter, vulnScanStatusFilter},
 		},
 		APITopologyDesc{
 			id:          cloudProvidersID,
@@ -488,7 +552,7 @@ type APITopologyDesc struct {
 	Name        string                   `json:"name"`
 	Rank        int                      `json:"rank"`
 	HideIfEmpty bool                     `json:"hide_if_empty"`
-	Options     []APITopologyOptionGroup `json:"options"`
+	Options     []APITopologyOptionGroup `json:"available_filters"`
 
 	URL           string            `json:"url"`
 	SubTopologies []APITopologyDesc `json:"sub_topologies,omitempty"`
@@ -514,6 +578,7 @@ type APITopologyOptionGroup struct {
 	SelectType string `json:"selectType,omitempty"`
 	// For "union" type, this is the label the UI should use to represent the case where nothing is selected
 	NoneLabel string `json:"noneLabel,omitempty"`
+	IsUiAvailable bool `json:"is_ui_available"`
 }
 
 // Get the render filters to use for this option group, if any, or nil otherwise.
@@ -656,6 +721,21 @@ func (r *Registry) makeTopologyList(rep Reporter) CtxHandlerFunc {
 	}
 }
 
+type filtersRequest struct {
+	FilterTopologies map[string]filterTopology `json:"topologies"`
+}
+
+type filterTopology struct {
+	Name           string                    `json:"name"`
+	SubTopologies  map[string]filterTopology `json:"sub_topologies"`
+	AppliedFilters []appliedFilter           `json:"applied_filters"`
+}
+
+type appliedFilter struct {
+	Name    string   `json:"name"`
+	Values  []string `json:"values"`
+}
+
 func (r *Registry) renderTopologies(ctx context.Context, rpt report.Report, req *http.Request) []APITopologyDesc {
 	span, ctx := opentracing.StartSpanFromContext(ctx, "app.renderTopologies")
 	defer span.Finish()
@@ -673,7 +753,17 @@ func (r *Registry) renderTopologies(ctx context.Context, rpt report.Report, req 
 		}
 		topologies = append(topologies, desc)
 	})
-	return updateFilters(rpt, topologies)
+	// Since topology api is not being used for any other purpose, using the request to serve available filters
+	// based on current set of filters applied on topology
+	var filtersReq filtersRequest
+	if ct := req.Header.Get("Content-Type"); ct == "application/json" {
+		err := json.NewDecoder(req.Body).Decode(&filtersReq)
+		if err != nil {
+			fmt.Println("Could not parse filters json: ", err.Error())
+			return []APITopologyDesc{}
+		}
+	}
+	return updateFilters(rpt, topologies, filtersReq.FilterTopologies)
 }
 
 func computeStats(ctx context.Context, rpt report.Report, renderer render.Renderer, transformer render.Transformer) topologyStats {
@@ -706,7 +796,7 @@ func (r *Registry) RendererForTopology(topologyID string, values url.Values, rpt
 	if !ok {
 		return nil, nil, fmt.Errorf("topology not found: %s", topologyID)
 	}
-	topology = updateFilters(rpt, []APITopologyDesc{topology})[0]
+	topology = updateFilters(rpt, []APITopologyDesc{topology}, map[string]filterTopology{})[0]
 
 	if len(values) == 0 {
 		// if no options where provided, only apply base filter
