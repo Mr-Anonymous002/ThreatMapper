@@ -1148,7 +1148,8 @@ def node_action():
     df_id_to_scope_id_map = {}
     topology_data_df_format = {}
     include_dead_nodes = bool(post_data.get("include_dead_nodes", False))
-    node_action_details = {"node_type": node_type, "include_dead_nodes": include_dead_nodes}
+    node_action_details = {"node_type": node_type, "include_dead_nodes": include_dead_nodes,
+                           "file_type": post_data.get("file_type", "xlsx")}
 
     action_args = post_data.get("action_args", {})
     if action_args and type(action_args) != dict:
@@ -1306,7 +1307,7 @@ def node_action():
                 nodes=node_action_details, is_enabled=True, node_names=node_names, status="")
             scheduled_action.save()
         except Exception as exc:
-            raise DFError("Could not save scheduled task", error=exc)
+            return set_response(error="Could not save scheduled task: {}".format(exc), status=400)
         return set_response("Ok")
     return set_response("Ok")
 
